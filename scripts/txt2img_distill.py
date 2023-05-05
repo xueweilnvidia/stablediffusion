@@ -1,6 +1,7 @@
 import argparse, os
 import cv2
 import datasets
+import random
 from datasets import load_dataset
 import torch
 import numpy as np
@@ -213,6 +214,29 @@ def put_watermark(img, wm_encoder=None):
         img = Image.fromarray(img[:, :, ::-1])
     return img
 
+def add_noise(
+        model,
+        original_samples: torch.FloatTensor,
+        noise: torch.FloatTensor,
+        timesteps: torch.IntTensor,
+    ) -> torch.FloatTensor:
+        # Make sure alphas_cumprod and timestep have same device and dtype as original_samples
+        alphas_cumprod = model.alphas_cumprod.to(device=original_samples.device, dtype=original_samples.dtype)
+        # timesteps = timesteps.to(original_samples.device)
+
+        sqrt_alpha_prod = alphas_cumprod[timesteps] ** 0.5
+        sqrt_alpha_prod = sqrt_alpha_prod.flatten()
+        while len(sqrt_alpha_prod.shape) < len(original_samples.shape):
+            sqrt_alpha_prod = sqrt_alpha_prod.unsqueeze(-1)
+
+        sqrt_one_minus_alpha_prod = (1 - alphas_cumprod[timesteps]) ** 0.5
+        sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.flatten()
+        while len(sqrt_one_minus_alpha_prod.shape) < len(original_samples.shape):
+            sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.unsqueeze(-1)
+
+        noisy_samples = sqrt_alpha_prod * original_samples + sqrt_one_minus_alpha_prod * noise
+        return noisy_samples
+
 
 def main(opt):
 
@@ -326,6 +350,9 @@ def main(opt):
                 prompts = batch["input_texts"]
                 distribution = model.encode_first_stage(batch["pixel_values"].to("cuda"))
                 x_input = model.get_first_stage_encoding(distribution)
+                index = random.randint(0, 1)
+                noise = torch.randn_like(x_input)
+                noisy_img = add_noise(model, x_input, noise, index)
                 uc = None
                 if opt.scale != 1.0:
                     uc = model.get_learned_conditioning(batch_size * [""])
@@ -339,7 +366,8 @@ def main(opt):
                                         unconditional_guidance_scale=opt.scale,
                                         unconditional_conditioning=uc,
                                         eta=opt.ddim_eta,
-                                        x_T=x_input)    
+                                        x_T=noisy_img,
+                                        index = index)    
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
