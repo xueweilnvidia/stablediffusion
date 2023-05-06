@@ -22,7 +22,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 
-torch.set_grad_enabled(False)
+torch.set_grad_enabled(True)
 
 def chunk(it, size):
     it = iter(it)
@@ -52,8 +52,27 @@ def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=Fa
     else:
         raise ValueError(f"Incorrect device name. Received: {device}")
     model.eval()
-    return model
 
+    unet_config = config.model.params.unet_config
+    unet_model = instantiate_from_config(unet_config)
+    a, b = unet_model.load_state_dict(sd, strict=False)
+    if len(a) > 0 and verbose:
+        print("missing keys:")
+        print(a)
+    if len(b) > 0 and verbose:
+        print("unexpected keys:")
+        print(b)
+    if device == torch.device("cuda"):
+        unet_model.cuda()
+    elif device == torch.device("cpu"):
+        unet_model.cpu()
+
+    return model, unet_model
+
+# def load_student_model(config, device=torch.device("cuda")):
+#     unet_config = config.model.params.unet_config
+#     unet_model = instantiate_from_config(unet_config)
+#     print("test")
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -214,6 +233,25 @@ def put_watermark(img, wm_encoder=None):
         img = Image.fromarray(img[:, :, ::-1])
     return img
 
+def compute_snr(model, timesteps):
+        """
+        Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
+        """
+        alphas_cumprod = model.alphas_cumprod
+        sqrt_alphas_cumprod = alphas_cumprod**0.5
+        sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
+
+        # Expand the tensors.
+        # Adapted from https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L1026
+        alpha = sqrt_alphas_cumprod[timesteps].float()
+        
+        sigma = sqrt_one_minus_alphas_cumprod[timesteps].float()
+
+        # Compute SNR.
+        snr = (alpha / sigma) ** 2 + 1
+        return snr
+
+
 def add_noise(
         model,
         original_samples: torch.FloatTensor,
@@ -307,7 +345,8 @@ def main(opt):
 
     config = OmegaConf.load(f"{opt.config}")
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
-    model = load_model_from_config(config, f"{opt.ckpt}", device)
+    # unet_model = load_student_model(config, device=torch.device("cuda"))
+    model, unet_model = load_model_from_config(config, f"{opt.ckpt}", device)
     
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -315,6 +354,13 @@ def main(opt):
         sampler = DPMSolverSampler(model, device=device)
     else:
         sampler = DDIMSampler(model, device=device)
+
+    mse = torch.nn.MSELoss(reduce=sum)
+    optimizer_cls = torch.optim.Adam
+    optimizer = optimizer_cls(
+        unet_model.parameters(),
+        lr=1e-4
+    )
 
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
@@ -340,34 +386,61 @@ def main(opt):
 
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
-
+    sampler.make_schedule(ddim_num_steps=opt.steps, ddim_eta=opt.ddim_eta, verbose=False)
+    shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+    C, H, W = shape
+    size = (batch_size, C, H, W)
+    print(f'Data shape for DDIM sampling is {size}, eta {opt.ddim_eta}')
 
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
-    with torch.no_grad(), \
-        precision_scope(opt.device), \
-        model.ema_scope():
-            for batch in train_dataloader:
-                prompts = batch["input_texts"]
-                distribution = model.encode_first_stage(batch["pixel_values"].to("cuda"))
-                x_input = model.get_first_stage_encoding(distribution)
-                index = random.randint(0, 1)
-                noise = torch.randn_like(x_input)
-                noisy_img = add_noise(model, x_input, noise, index)
-                uc = None
-                if opt.scale != 1.0:
-                    uc = model.get_learned_conditioning(batch_size * [""])
-                c = model.get_learned_conditioning(prompts)
-                shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                outs = sampler.sample(S=opt.steps,
-                                        conditioning=c,
-                                        batch_size=opt.n_samples,
-                                        shape=shape,
-                                        verbose=False,
-                                        unconditional_guidance_scale=opt.scale,
-                                        unconditional_conditioning=uc,
-                                        eta=opt.ddim_eta,
-                                        x_T=noisy_img,
-                                        index = index)    
+    count = 0
+    with precision_scope(opt.device), model.ema_scope():
+        for batch in train_dataloader:
+            count = count + 1
+            prompts = batch["input_texts"]
+            print(prompts)
+            distribution = model.encode_first_stage(batch["pixel_values"].to("cuda"))
+            x_input = model.get_first_stage_encoding(distribution)
+            index = random.randint(0, 1)
+            noise = torch.randn_like(x_input)
+            noisy_img = add_noise(model, x_input, noise, index)
+            snr = compute_snr(model, index).to("cpu").item()
+            uc = None
+            if opt.scale != 1.0:
+                uc = model.get_learned_conditioning(batch_size * [""])
+            c = model.get_learned_conditioning(prompts)
+            model.eval()
+            with torch.no_grad():
+                outs = sampler.ddim_sampling_distill(c, size,
+                                                    callback=None,
+                                                    img_callback=None,
+                                                    quantize_denoised=False,
+                                                    mask=None, x0=None,
+                                                    ddim_use_original_steps=False,
+                                                    noise_dropout=0,
+                                                    temperature=1,
+                                                    score_corrector=None,
+                                                    corrector_kwargs=None,
+                                                    x_T=noisy_img,
+                                                    index = index,
+                                                    log_every_t=100,
+                                                    unconditional_guidance_scale=opt.scale,
+                                                    unconditional_conditioning=uc,
+                                                    dynamic_threshold=None,
+                                                    ucg_schedule=None
+                                                    )
+            unet_model.train()
+            t_in = torch.full((batch_size,), index, device=device, dtype=torch.long)
+            student_out = unet_model(noisy_img, t_in, c)
+            loss = mse(student_out, outs) * snr
+            loss.backward()
+            optimizer.step()
+            
+            if count%10 == 0:
+                print("current loss: ", loss)
+            
+            optimizer.zero_grad()
+            
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")

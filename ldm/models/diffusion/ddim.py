@@ -159,6 +159,9 @@ class DDIMSampler(object):
         else:
             img = x_T
 
+        # print("X_T is: ")
+        # print(img)
+
         # index = random.randint(0, 1)
         if index == None:
             raise Exception("index should not be None!")
@@ -168,6 +171,8 @@ class DDIMSampler(object):
         # noisy_img = self.add_noise(img, noise, index)
         
         ts = torch.full((b,), step, device=device, dtype=torch.long)
+        # print("ts: ")
+        # print(ts)
         outs = self.p_sample_ddim_distill(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                     quantize_denoised=quantize_denoised, temperature=temperature,
                                     noise_dropout=noise_dropout, score_corrector=score_corrector,
@@ -209,6 +214,13 @@ class DDIMSampler(object):
                     c_in.append(torch.cat([unconditional_conditioning[i], c[i]]))
             else:
                 c_in = torch.cat([unconditional_conditioning, c])
+            
+            # print("x_in: ")
+            # print(x_in)
+            # print("t_in: ")
+            # print(t_in)
+            # print("c_in")
+            # print(c_in)
             model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in).chunk(2)
             model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
 

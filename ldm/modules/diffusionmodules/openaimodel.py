@@ -481,6 +481,8 @@ class UNetModel(nn.Module):
         use_linear_in_transformer=False,
         adm_in_channels=None,
     ):
+        # use_bf16 = False
+        # use_fp16 = False
         super().__init__()
         if use_spatial_transformer:
             assert context_dim is not None, 'Fool!! You forgot to include the dimension of your cross-attention conditioning...'
@@ -747,7 +749,9 @@ class UNetModel(nn.Module):
         self.out = nn.Sequential(
             normalization(ch),
             nn.SiLU(),
+            #  this line make the output different every time
             zero_module(conv_nd(dims, model_channels, out_channels, 3, padding=1)),
+            # conv_nd(dims, model_channels, out_channels, 3, padding=1)
         )
         if self.predict_codebook_ids:
             self.id_predictor = nn.Sequential(
@@ -786,20 +790,35 @@ class UNetModel(nn.Module):
         ), "must specify y if and only if the model is class-conditional"
         hs = []
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
+        # print("t_emb: ")
+        # print(t_emb)
         emb = self.time_embed(t_emb)
+        # print("emb: ")
+        # print(emb)
 
         if self.num_classes is not None:
             assert y.shape[0] == x.shape[0]
             emb = emb + self.label_emb(y)
+        # print("emb with label: ")
+        # print(emb)
 
         h = x.type(self.dtype)
         for module in self.input_blocks:
             h = module(h, emb, context)
             hs.append(h)
+        
+        # print("h: ")
+        # print(h)
         h = self.middle_block(h, emb, context)
+
+        # print("h1: ")
+        # print(h)
         for module in self.output_blocks:
             h = th.cat([h, hs.pop()], dim=1)
             h = module(h, emb, context)
+        
+        # print("h2: ")
+        # print(h)
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
             return self.id_predictor(h)
