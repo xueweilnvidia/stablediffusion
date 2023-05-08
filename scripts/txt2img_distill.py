@@ -432,12 +432,13 @@ def main(opt):
             unet_model.train()
             t_in = torch.full((batch_size,), index, device=device, dtype=torch.long)
             student_out = unet_model(noisy_img, t_in, c)
-            loss = mse(student_out, outs) * snr
+            square_loss = mse(student_out, outs)
+            loss = square_loss * snr
             loss.backward()
             optimizer.step()
             
             if count%10 == 0:
-                print("current loss: ", loss)
+                print("current loss: ", square_loss)
             
             optimizer.zero_grad()
             
