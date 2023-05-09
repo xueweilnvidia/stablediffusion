@@ -23,6 +23,7 @@ from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 
 torch.set_grad_enabled(True)
+# torch.set_grad_enabled(False)
 
 def chunk(it, size):
     it = iter(it)
@@ -275,6 +276,65 @@ def add_noise(
         noisy_samples = sqrt_alpha_prod * original_samples + sqrt_one_minus_alpha_prod * noise
         return noisy_samples
 
+def one_batch(
+        is_train,
+        batch,
+        model, 
+        batch_size, 
+        sampler,
+        input_shape,
+        unet_model,
+        device,
+        mse,
+        optimizer):
+    prompts = batch["input_texts"]
+    print(prompts)
+    distribution = model.encode_first_stage(batch["pixel_values"].to("cuda"))
+    x_input = model.get_first_stage_encoding(distribution)
+    index = random.randint(0, 1)
+    noise = torch.randn_like(x_input)
+    noisy_img = add_noise(model, x_input, noise, index)
+    snr = compute_snr(model, index).to("cpu").item()
+    uc = None
+    if opt.scale != 1.0:
+        uc = model.get_learned_conditioning(batch_size * [""])
+    c = model.get_learned_conditioning(prompts)
+    model.eval()
+    with torch.no_grad():
+        outs = sampler.ddim_sampling_distill(c, input_shape,
+                                            callback=None,
+                                            img_callback=None,
+                                            quantize_denoised=False,
+                                            mask=None, x0=None,
+                                            ddim_use_original_steps=False,
+                                            noise_dropout=0,
+                                            temperature=1,
+                                            score_corrector=None,
+                                            corrector_kwargs=None,
+                                            x_T=noisy_img,
+                                            index = index,
+                                            log_every_t=100,
+                                            unconditional_guidance_scale=opt.scale,
+                                            unconditional_conditioning=uc,
+                                            dynamic_threshold=None,
+                                            ucg_schedule=None
+                                            )
+    t_in = torch.full((batch_size,), index, device=device, dtype=torch.long)
+    if is_train:
+        unet_model.train()
+        optimizer.zero_grad()
+    else:
+        unet_model.eval()
+    
+    student_out = unet_model(noisy_img, t_in, c)
+    square_loss = mse(student_out, outs)
+
+    if is_train:
+        loss = square_loss * snr
+        loss.backward()
+        optimizer.step()
+    return square_loss
+
 
 def main(opt):
 
@@ -284,15 +344,21 @@ def main(opt):
     datasets.utils.logging.set_verbosity_warning()
 
 
-    dataset = load_dataset(
+    dataset_train = load_dataset(
         "lambdalabs/pokemon-blip-captions",
         None,
+        split = 'train[:80%]',
         cache_dir="/data/stable-diffusion-all/stable-diffusion-21/cache",
     )
 
-    column_names = dataset["train"].column_names
+    dataset_test = load_dataset(
+        "lambdalabs/pokemon-blip-captions",
+        None,
+        split = 'train[80%:]',
+        cache_dir="/data/stable-diffusion-all/stable-diffusion-21/cache",
+    )
 
-    # dataset_columns = DATASET_NAME_MAPPING.get("lambdalabs/pokemon-blip-captions", None)
+    column_names = dataset_train.column_names
 
     image_column = "image"
     if image_column not in column_names:
@@ -325,7 +391,8 @@ def main(opt):
         examples["pixel_values"] = [train_transforms(image) for image in images]
         return examples
     
-    train_dataset = dataset["train"].with_transform(preprocess_train)
+    train_dataset = dataset_train.with_transform(preprocess_train)
+    test_dataset = dataset_test.with_transform(preprocess_train)
     
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
@@ -339,6 +406,14 @@ def main(opt):
         collate_fn=collate_fn,
         batch_size=opt.n_samples,
         num_workers=0,
+    )
+
+    test_dataloader = torch.utils.data.DataLoader(
+        test_dataset,
+        shuffle=False,
+        collate_fn=collate_fn,
+        batch_size = 1,
+        num_worker=0,
     )
 
     seed_everything(opt.seed)
@@ -397,50 +472,20 @@ def main(opt):
     with precision_scope(opt.device), model.ema_scope():
         for batch in train_dataloader:
             count = count + 1
-            prompts = batch["input_texts"]
-            print(prompts)
-            distribution = model.encode_first_stage(batch["pixel_values"].to("cuda"))
-            x_input = model.get_first_stage_encoding(distribution)
-            index = random.randint(0, 1)
-            noise = torch.randn_like(x_input)
-            noisy_img = add_noise(model, x_input, noise, index)
-            snr = compute_snr(model, index).to("cpu").item()
-            uc = None
-            if opt.scale != 1.0:
-                uc = model.get_learned_conditioning(batch_size * [""])
-            c = model.get_learned_conditioning(prompts)
-            model.eval()
-            with torch.no_grad():
-                outs = sampler.ddim_sampling_distill(c, size,
-                                                    callback=None,
-                                                    img_callback=None,
-                                                    quantize_denoised=False,
-                                                    mask=None, x0=None,
-                                                    ddim_use_original_steps=False,
-                                                    noise_dropout=0,
-                                                    temperature=1,
-                                                    score_corrector=None,
-                                                    corrector_kwargs=None,
-                                                    x_T=noisy_img,
-                                                    index = index,
-                                                    log_every_t=100,
-                                                    unconditional_guidance_scale=opt.scale,
-                                                    unconditional_conditioning=uc,
-                                                    dynamic_threshold=None,
-                                                    ucg_schedule=None
-                                                    )
-            unet_model.train()
-            t_in = torch.full((batch_size,), index, device=device, dtype=torch.long)
-            student_out = unet_model(noisy_img, t_in, c)
-            square_loss = mse(student_out, outs)
-            loss = square_loss * snr
-            loss.backward()
-            optimizer.step()
+            square_loss = one_batch(
+                            True,
+                            batch,
+                            model, 
+                            batch_size, 
+                            sampler,
+                            size,
+                            unet_model,
+                            device,
+                            mse,
+                            optimizer)
             
             if count%10 == 0:
                 print("current loss: ", square_loss)
-            
-            optimizer.zero_grad()
             
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
