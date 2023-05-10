@@ -333,7 +333,7 @@ def one_batch(
         loss = square_loss * snr
         loss.backward()
         optimizer.step()
-    return square_loss
+    return square_loss.item()
 
 
 def main(opt):
