@@ -22,8 +22,8 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 
-torch.set_grad_enabled(True)
-# torch.set_grad_enabled(False)
+# torch.set_grad_enabled(True)
+torch.set_grad_enabled(False)
 
 def chunk(it, size):
     it = iter(it)
@@ -411,9 +411,9 @@ def main(opt):
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset,
         shuffle=False,
-        collate_fn=collate_fn,
-        batch_size = 1,
-        num_worker=0,
+        collate_fn= collate_fn,
+        batch_size = opt.n_samples,
+        num_workers=0,
     )
 
     seed_everything(opt.seed)
@@ -467,25 +467,48 @@ def main(opt):
     size = (batch_size, C, H, W)
     print(f'Data shape for DDIM sampling is {size}, eta {opt.ddim_eta}')
 
+    epoch = 4
     precision_scope = autocast if opt.precision=="autocast" or opt.bf16 else nullcontext
     count = 0
     with precision_scope(opt.device), model.ema_scope():
-        for batch in train_dataloader:
-            count = count + 1
-            square_loss = one_batch(
-                            True,
-                            batch,
-                            model, 
-                            batch_size, 
-                            sampler,
-                            size,
-                            unet_model,
-                            device,
-                            mse,
-                            optimizer)
+        #train
+        for n in range(epoch):
+            for batch in train_dataloader:
+                count = count + 1
+                square_loss = one_batch(
+                                True,
+                                batch,
+                                model, 
+                                batch_size, 
+                                sampler,
+                                size,
+                                unet_model,
+                                device,
+                                mse,
+                                optimizer)
+                
+                if count%10 == 0:
+                    print("current loss: ", square_loss)
+
+            # validate
+            loss_list = []
+            for batch in test_dataloader:
+                count = count + 1
+                square_loss = one_batch(
+                                False,
+                                batch,
+                                model, 
+                                batch_size, 
+                                sampler,
+                                size,
+                                unet_model,
+                                device,
+                                mse,
+                                optimizer)
+                loss_list.append(square_loss)
             
-            if count%10 == 0:
-                print("current loss: ", square_loss)
+            validate_loss_mean = sum(loss_list) / len(loss_list)
+            print("validate loss mean is: ", validate_loss_mean)
             
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
