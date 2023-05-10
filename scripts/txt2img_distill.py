@@ -288,7 +288,7 @@ def one_batch(
         mse,
         optimizer):
     prompts = batch["input_texts"]
-    print(prompts)
+    # print(prompts)
     distribution = model.encode_first_stage(batch["pixel_values"].to("cuda"))
     x_input = model.get_first_stage_encoding(distribution)
     index = random.randint(0, 1)
