@@ -22,8 +22,8 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 
-# torch.set_grad_enabled(True)
-torch.set_grad_enabled(False)
+torch.set_grad_enabled(True)
+# torch.set_grad_enabled(False)
 
 def chunk(it, size):
     it = iter(it)
