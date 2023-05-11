@@ -62,8 +62,7 @@ def load_model_from_config(config, ckpt, student_ckpt, device=torch.device("cuda
     unet_config = config.model.params.unet_config
     unet_model = instantiate_from_config(unet_config)
     if student_validate_only:
-        pl_sd = torch.load(student_ckpt, map_location="cpu")
-        sd = pl_sd["state_dict"]
+        sd = torch.load(student_ckpt, map_location="cpu")
     a, b = unet_model.load_state_dict(sd, strict=False)
     if len(a) > 0 and verbose:
         print("missing keys:")
