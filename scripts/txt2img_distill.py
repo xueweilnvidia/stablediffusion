@@ -425,7 +425,7 @@ def main(opt):
     config = OmegaConf.load(f"{opt.config}")
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     # unet_model = load_student_model(config, device=torch.device("cuda"))
-    model, unet_model = load_model_from_config(config, f"{opt.ckpt}", "../checkpoint/student_model_"+str(0),  device) 
+    model, unet_model = load_model_from_config(config, f"{opt.ckpt}", "./student_model_"+str(0),  device) 
     
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -495,7 +495,7 @@ def main(opt):
                     if count%10 == 0:
                         print("current loss: ", square_loss)
                 
-                torch.save(unet_model.state_dict(), "../checkpoint/student_model_"+str(n))
+                torch.save(unet_model.state_dict(), "./student_model_"+str(n))
             
             # validate
             loss_list = []
