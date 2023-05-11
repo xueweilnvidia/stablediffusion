@@ -22,15 +22,20 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 
-torch.set_grad_enabled(True)
-# torch.set_grad_enabled(False)
+student_validate_only = False
+
+if student_validate_only:
+    torch.set_grad_enabled(False)
+else:
+    torch.set_grad_enabled(True)
+
 
 def chunk(it, size):
     it = iter(it)
     return iter(lambda: tuple(islice(it, size)), ())
 
 
-def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=False):
+def load_model_from_config(config, ckpt, student_ckpt, device=torch.device("cuda"), verbose=False):
     print(f"Loading model from {ckpt}")
     pl_sd = torch.load(ckpt, map_location="cpu")
     if "global_step" in pl_sd:
@@ -56,6 +61,9 @@ def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=Fa
 
     unet_config = config.model.params.unet_config
     unet_model = instantiate_from_config(unet_config)
+    if student_validate_only:
+        pl_sd = torch.load(student_ckpt, map_location="cpu")
+        sd = pl_sd["state_dict"]
     a, b = unet_model.load_state_dict(sd, strict=False)
     if len(a) > 0 and verbose:
         print("missing keys:")
@@ -70,10 +78,6 @@ def load_model_from_config(config, ckpt, device=torch.device("cuda"), verbose=Fa
 
     return model, unet_model
 
-# def load_student_model(config, device=torch.device("cuda")):
-#     unet_config = config.model.params.unet_config
-#     unet_model = instantiate_from_config(unet_config)
-#     print("test")
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -347,7 +351,7 @@ def main(opt):
     dataset_train = load_dataset(
         "lambdalabs/pokemon-blip-captions",
         None,
-        split = 'train[:80%]',
+        split = 'train[:20%]',
         cache_dir="/data/stable-diffusion-all/stable-diffusion-21/cache",
     )
 
@@ -421,7 +425,7 @@ def main(opt):
     config = OmegaConf.load(f"{opt.config}")
     device = torch.device("cuda") if opt.device == "cuda" else torch.device("cpu")
     # unet_model = load_student_model(config, device=torch.device("cuda"))
-    model, unet_model = load_model_from_config(config, f"{opt.ckpt}", device)
+    model, unet_model = load_model_from_config(config, f"{opt.ckpt}", "../checkpoint/student_model_"+str(0),  device) 
     
     if opt.plms:
         sampler = PLMSSampler(model, device=device)
@@ -473,23 +477,26 @@ def main(opt):
     with precision_scope(opt.device), model.ema_scope():
         #train
         for n in range(epoch):
-            for batch in train_dataloader:
-                count = count + 1
-                square_loss = one_batch(
-                                True,
-                                batch,
-                                model, 
-                                batch_size, 
-                                sampler,
-                                size,
-                                unet_model,
-                                device,
-                                mse,
-                                optimizer)
+            if not student_validate_only:
+                for batch in train_dataloader:
+                    count = count + 1
+                    square_loss = one_batch(
+                                    True,
+                                    batch,
+                                    model, 
+                                    batch_size, 
+                                    sampler,
+                                    size,
+                                    unet_model,
+                                    device,
+                                    mse,
+                                    optimizer)
+                    
+                    if count%10 == 0:
+                        print("current loss: ", square_loss)
                 
-                if count%10 == 0:
-                    print("current loss: ", square_loss)
-
+                torch.save(unet_model.state_dict(), "../checkpoint/student_model_"+str(n))
+            
             # validate
             loss_list = []
             for batch in test_dataloader:
