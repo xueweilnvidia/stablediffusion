@@ -1333,18 +1333,18 @@ class DiffusionWrapper(pl.LightningModule):
                 out = self.scripted_diffusion_model(x, t, cc)
             else:
                 out = self.diffusion_model(x, t, context=cc)
-                # print(x.shape)
-                # print(t.shape)
+                print(x.shape)
+                print(t.shape)
                 # print(cc.shape)
 
-                x_in = torch.randn(2, 4, 64, 64, dtype=torch.float32).to("cuda")
+                x_in = torch.randn(2, 4, 128, 128, dtype=torch.float32).to("cuda")
                 t_in = torch.zeros(2, dtype=torch.float32).to("cuda")
                 c_in = torch.randn(2, 77, 768, dtype=torch.float32).to("cuda")
                 # torch_out = sd_model(x_in, t_in, c_in)
                 # self.diffusion_model.to("cpu")
                 torch.onnx.export(self.diffusion_model,               # model being run
                   (x_in, t_in, c_in),                         # model input (or a tuple for multiple inputs)
-                  "./sd_webui_unet.onnx",   # where to save the model (can be a file or file-like object)
+                  "./sd_webui_unet_1024.onnx",   # where to save the model (can be a file or file-like object)
                   export_params=True,        # store the trained parameter weights inside the model file
                   opset_version=16,          # the ONNX version to export the model to
                   do_constant_folding=True,  # whether to execute constant folding for optimization
