@@ -1337,24 +1337,24 @@ class DiffusionWrapper(pl.LightningModule):
                 # print(t.shape)
                 # print(cc.shape)
 
-                x_in = torch.randn(2, 4, 64, 64, dtype=torch.float32).to("cuda")
-                t_in = torch.zeros(2, dtype=torch.float32).to("cuda")
-                c_in = torch.randn(2, 77, 768, dtype=torch.float32).to("cuda")
-                # torch_out = sd_model(x_in, t_in, c_in)
-                # self.diffusion_model.to("cpu")
-                torch.onnx.export(self.diffusion_model,               # model being run
-                  (x_in, t_in, c_in),                         # model input (or a tuple for multiple inputs)
-                  "./sd_webui_unet.onnx",   # where to save the model (can be a file or file-like object)
-                  export_params=True,        # store the trained parameter weights inside the model file
-                  opset_version=16,          # the ONNX version to export the model to
-                  do_constant_folding=True,  # whether to execute constant folding for optimization
-                  keep_initializers_as_inputs=True,
-                  input_names = ['x_in', "t_in", "c_in"],   # the model's input names
-                  output_names = ['latent'], # the model's output names
-                  dynamic_axes={'x_in' : {0 : 'bs'},    # variable length axes
-                                't_in' : {0 : 'bs'},
-                                'c_in' : {0 : 'bs'},
-                                'latent' : {0 : 'bs'}})
+                # x_in = torch.randn(2, 4, 64, 64, dtype=torch.float32).to("cuda")
+                # t_in = torch.zeros(2, dtype=torch.float32).to("cuda")
+                # c_in = torch.randn(2, 77, 768, dtype=torch.float32).to("cuda")
+                # # torch_out = sd_model(x_in, t_in, c_in)
+                # # self.diffusion_model.to("cpu")
+                # torch.onnx.export(self.diffusion_model,               # model being run
+                #   (x_in, t_in, c_in),                         # model input (or a tuple for multiple inputs)
+                #   "./sd_webui_unet.onnx",   # where to save the model (can be a file or file-like object)
+                #   export_params=True,        # store the trained parameter weights inside the model file
+                #   opset_version=16,          # the ONNX version to export the model to
+                #   do_constant_folding=True,  # whether to execute constant folding for optimization
+                #   keep_initializers_as_inputs=True,
+                #   input_names = ['x_in', "t_in", "c_in"],   # the model's input names
+                #   output_names = ['latent'], # the model's output names
+                #   dynamic_axes={'x_in' : {0 : 'bs'},    # variable length axes
+                #                 't_in' : {0 : 'bs'},
+                #                 'c_in' : {0 : 'bs'},
+                #                 'latent' : {0 : 'bs'}})
 
 
         elif self.conditioning_key == 'hybrid':
