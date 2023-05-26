@@ -174,9 +174,11 @@ class CrossAttention(nn.Module):
         if _ATTN_PRECISION =="fp32":
             with torch.autocast(enabled=False, device_type = 'cuda'):
                 q, k = q.float(), k.float()
-                sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+                # sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+                sim = torch.bmm(q, k) * self.scale
         else:
-            sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+            # sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+            sim = torch.bmm(q, k) * self.scale
         
         del q, k
     
@@ -189,7 +191,8 @@ class CrossAttention(nn.Module):
         # attention, what we cannot get enough of
         sim = sim.softmax(dim=-1)
 
-        out = einsum('b i j, b j d -> b i d', sim, v)
+        # out = einsum('b i j, b j d -> b i d', sim, v)
+        out = torch.bmm(sim, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         return self.to_out(out)
 
