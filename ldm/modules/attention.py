@@ -127,6 +127,7 @@ class SpatialSelfAttention(nn.Module):
         b,c,h,w = q.shape
         q = rearrange(q, 'b c h w -> b (h w) c')
         k = rearrange(k, 'b c h w -> b c (h w)')
+        print("s1 q: ", q.shape)
         w_ = torch.einsum('bij,bjk->bik', q, k)
 
         w_ = w_ * (int(c)**(-0.5))
@@ -135,6 +136,7 @@ class SpatialSelfAttention(nn.Module):
         # attend to values
         v = rearrange(v, 'b c h w -> b c (h w)')
         w_ = rearrange(w_, 'b i j -> b j i')
+        print("s1 v: ", v.shape)
         h_ = torch.einsum('bij,bjk->bik', v, w_)
         h_ = rearrange(h_, 'b c (h w) -> b c h w', h=h)
         h_ = self.proj_out(h_)
@@ -174,11 +176,13 @@ class CrossAttention(nn.Module):
         if _ATTN_PRECISION =="fp32":
             with torch.autocast(enabled=False, device_type = 'cuda'):
                 q, k = q.float(), k.float()
-                # sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
-                sim = torch.bmm(q, k) * self.scale
+                sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+                print("s2 q: ", q.shape)
+                # sim = torch.bmm(q, k) * self.scale
         else:
-            # sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
-            sim = torch.bmm(q, k) * self.scale
+            sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+            print("s2 q: ", q.shape)
+            # sim = torch.bmm(q, k) * self.scale
         
         del q, k
     
@@ -191,8 +195,9 @@ class CrossAttention(nn.Module):
         # attention, what we cannot get enough of
         sim = sim.softmax(dim=-1)
 
-        # out = einsum('b i j, b j d -> b i d', sim, v)
-        out = torch.bmm(sim, v)
+        print("s2 v: ", v.shape)
+        out = einsum('b i j, b j d -> b i d', sim, v)
+        # out = torch.bmm(sim, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         return self.to_out(out)
 
